@@ -178,6 +178,23 @@ def test_files_woven_into_spiral_mask(tmp_path):
         iso9660.FileSystem(src, "Masked", allowed=np.flatnonzero(sec)[:5])
 
 
+def test_mask_fit_is_strict_until_files_need_the_edges():
+    share = np.r_[np.ones(10), np.full(10, 0.75), np.full(10, 0.5), np.full(10, 0.25)]
+
+    def build(need):
+        def b(allowed):
+            if len(allowed) < need:
+                raise ValueError("files need more")
+            return len(allowed)
+        return b
+
+    assert writer.fit_to_mask(share, build(8)) == (10, 1.0)
+    assert writer.fit_to_mask(share, build(15)) == (20, 0.75)
+    assert writer.fit_to_mask(share, build(30)) == (30, 0.5)
+    with pytest.raises(ValueError):  # the black-heavy sectors are never used
+        writer.fit_to_mask(share, build(31))
+
+
 def test_hiding_math():
     t = 0.5
     assert np.allclose(hide.limit(np.array([0.0, 0.25, 0.5, 0.75, 1.0]), t), [0, 0.5, 1, 0.5, 0])

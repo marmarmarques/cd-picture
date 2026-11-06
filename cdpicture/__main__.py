@@ -155,11 +155,15 @@ def _layout(args, prof, geo, total, report_room=False):
         else:
             if not os.path.isfile(place):
                 _fail(f"--place is auto, center or a mask PNG; {place!r} is not a file")
-            region = writer.data_sectors(D.mask_region(place, args.diameter_mm), geo, total)
-            fs = build(np.flatnonzero(region))
+            share = writer.footprint_share(D.mask_region(place, args.diameter_mm), geo, total)
+            fs, t = writer.fit_to_mask(share, build)
+            region = share >= t
             out["design"], out["region"] = picture(c), region
             notes = [f"mask {os.path.basename(place)}: {_mb(region.sum())} of data area, "
-                     f"{100 * fs.data_sectors(total).sum() / max(1, region.sum()):.0f} % used"]
+                     f"{100 * (fs.data_sectors(total) & region).sum() / max(1, region.sum()):.0f} % used",
+                     "strict: no file data reaches into the black" if t >= 1 else
+                     f"files don't fit strictly ({_mb((share >= 1).sum())}), so sectors {t:.0%} in the white "
+                     f"are used too: data reaches into the black at the mask's edges"]
     except ValueError as e:
         _fail(e)
     size = sum(f["bytes"] for f in fs.entries())
@@ -256,7 +260,8 @@ def main(argv=None):
         sp.add_argument("--files", help="folder to put on the disc")
         sp.add_argument("--place", default="auto",
                         help="where the files go: auto (hidden in the picture, default), center (a block in "
-                             "the middle, picture outside it), or a mask PNG (white = files)")
+                             "the middle, picture outside it), or a mask PNG (white = files; kept strictly "
+                             "inside the white unless the files only fit by using its edges)")
         sp.add_argument("--contrast", type=_contrast, default=None, metavar="PERCENT|auto",
                         help="how much of the picture's contrast to keep (default auto: all of it, or with "
                              "--place auto as much as still lets the files fit)")

@@ -114,10 +114,39 @@ def data_sectors(region, geo: Geometry, total_sectors, threshold=0.5):
     track, so the picture/data border on the disc is blurred over roughly one sector
     whichever way a sector is assigned. The choice only changes the look, not the data.
     """
-    out = np.empty(total_sectors, bool)
+    return footprint_share(region, geo, total_sectors) >= threshold
+
+
+def footprint_share(region, geo: Geometry, total_sectors):
+    """Per sector: the share (0..1) of its CIRC footprint that lies in `region`."""
+    out = np.empty(total_sectors)
     for lbas, hit in geo.sample_footprints(region.astype(np.uint8), total_sectors):
-        out[lbas] = hit.mean(axis=1) >= threshold
+        out[lbas] = hit.mean(axis=1)
     return out
+
+
+def fit_to_mask(share, build, floor=0.5):
+    """(file system, threshold) for the strictest threshold at which the files still fit.
+
+    Threshold 1 keeps file data in sectors whose whole footprint lies in the mask, so none
+    reaches past it; lower ones admit border sectors, down to `floor`. `build(allowed)` makes
+    the file system or raises ValueError when the files don't fit. Room only grows as the
+    threshold drops, so a binary search over the shares that occur finds it.
+    """
+    steps = np.unique(share[share >= floor])[::-1]  # strictest first
+    if not len(steps):
+        raise ValueError("the mask has no sector with at least half its track in the white")
+    lo, hi, best = 0, len(steps) - 1, None
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        try:
+            best = build(np.flatnonzero(share >= steps[mid])), float(steps[mid])
+            hi = mid - 1
+        except ValueError:
+            lo = mid + 1
+    if best is None:
+        build(np.flatnonzero(share >= steps[-1]))  # raises the "files need ..." error
+    return best
 
 
 # --- independent check ----------------------------------------------------------------------
