@@ -58,6 +58,30 @@ def data_threshold(k):
     return out
 
 
+def load_fit(geo_path: str, allow_stopped: bool = False) -> dict:
+    """The `fit` of a disc-probe geo summary.json, refused unless it is a whole run on a CD data track.
+
+    Since disc-probe 7d670ff, geo also measures a DiscImageStudio burn (one CD-DA track) and marks it
+    track=audio. That fit counts from the end of each sector in the audio stream, not from the CIRC
+    read end this package uses (108 frames later), so a picture drawn from it lands in the wrong place.
+    Since a689f5a, a run that ended early (tray opened, Ctrl+C) carries `stopped`: its fit can look fine
+    but only covers the radii it reached. Older results have neither field and can't be told apart.
+    """
+    with open(geo_path, encoding="utf-8") as f:
+        summary = json.load(f)
+    fit = summary["fit"]
+    if fit.get("media") != "cd":
+        raise ValueError("need a CD geometry fit (media=cd); DVD fits must not be reused")
+    if fit.get("track") == "audio":
+        raise ValueError("this geo run measured a CD-DA track (a DiscImageStudio picture burn). Its sectors count "
+                         "from a different origin, so the picture would land in the wrong place. Run geo on the "
+                         "random-data disc instead (python -m discprobe random --media cd)")
+    if summary.get("stopped") and not allow_stopped:
+        raise ValueError(f"this geo run stopped early ({summary['stopped']}), so it only covers the radii it "
+                         "reached. Run geo again, or pass --allow-stopped to use it anyway")
+    return fit
+
+
 def load_correction(path: str) -> Callable:
     """phi(r) in degrees from an angle-correction file (polynomial, held constant outside its range)."""
     with open(path, encoding="utf-8") as f:
@@ -90,10 +114,7 @@ class Geometry:
         Timing cannot see an along-track offset d (read completion vs written position):
         theta(n - d) is the same spiral with u^2 - v d / pi. Measure d on a burned grid disc.
         """
-        with open(geo_path, encoding="utf-8") as f:
-            fit = json.load(f)["fit"]
-        if fit.get("media") != "cd":
-            raise ValueError("need a CD geometry fit (media=cd); DVD fits must not be reused")
+        fit = load_fit(geo_path)
         return cls.measured(fit["u"], fit["v"], fit["bit_nm_assumed"],
                             load_correction(correction_path) if correction_path else None, along_track_frames)
 

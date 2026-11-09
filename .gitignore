@@ -3,6 +3,5 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 # Large working files stay local
-iso/
-results/
 temp/
+tools/

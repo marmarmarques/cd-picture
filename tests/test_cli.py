@@ -49,12 +49,39 @@ def test_profile_round_trip(disc):
     assert p.geometry().correction is not None
 
 
+def _geo(tmp_path, fit_extra=None, **summary_extra):
+    g = Geometry.nominal()
+    path = tmp_path / "geo.json"
+    fit = {"media": "cd", "u": g.u, "v": g.v, "bit_nm_assumed": g.bit_nm, **(fit_extra or {})}
+    path.write_text(json.dumps({"fit": fit, **summary_extra}))
+    return str(path)
+
+
+def test_audio_track_fit_is_refused(tmp_path):
+    geo = _geo(tmp_path, {"track": "audio", "read_offset_bytes": -603})
+    with pytest.raises(SystemExit, match="CD-DA track"):
+        main(["profile", "--geo", geo, "-o", str(tmp_path / "disc.json")])
+    with pytest.raises(ValueError, match="CD-DA track"):
+        Geometry.from_files(geo)
+    assert not (tmp_path / "disc.json").exists()
+
+
+def test_stopped_run_needs_allow_stopped(tmp_path):
+    geo = _geo(tmp_path, stopped="the tray was opened")
+    out = tmp_path / "disc.json"
+    with pytest.raises(SystemExit, match="stopped early"):
+        main(["profile", "--geo", geo, "-o", str(out)])
+    assert not out.exists()
+    main(["profile", "--geo", geo, "--allow-stopped", "-o", str(out)])
+    assert Profile.load(str(out)).u == Geometry.nominal().u
+
+
 def test_grid(disc, tmp_path):
     main(["grid", "--disc", disc, "--r-max", "26.5", "-o", str(tmp_path / "grid.iso")])
     assert (tmp_path / "grid.preview.png").exists()
 
 
-@pytest.mark.parametrize("place", ["auto", "center", "mask"])
+@pytest.mark.parametrize("place", ["auto", "center", "outer", "rings", "mask"])
 def test_make_with_files(disc, picture, files, tmp_path, place):
     if place == "mask":
         place = str(tmp_path / "mask.png")
@@ -67,6 +94,62 @@ def test_make_with_files(disc, picture, files, tmp_path, place):
           "--r-max", "27", "-o", out])  # exits non-zero if verification fails
     spec = json.load(open(str(tmp_path / "disc.image.json")))
     assert len(spec["files"]["entries"]) == 2
+
+
+def test_outer_ring_layout(disc, picture, files, tmp_path, capsys):
+    """Directories at LBA 16, file data in one run that ends with the image, one extent per file."""
+    out = str(tmp_path / "o.iso")
+    main(["make", "--disc", disc, "--picture", picture, "--files", files, "--place", "outer",
+          "--r-max", "27", "-o", out])
+    assert "files in the outer ring" in capsys.readouterr().out
+    spec = json.load(open(str(tmp_path / "o.image.json")))
+    total, fs = spec["total_sectors"], spec["files"]
+    assert fs["end_lba"] == total and fs["meta_end"] < 40
+    data = [e for e in fs["entries"] if e["bytes"]]
+    assert all(e["extents"] == 1 for e in data)
+    need = sum(-(-e["bytes"] // 2048) for e in data)
+    assert min(e["lba"] for e in data) == total - need
+
+
+def test_outer_ring_too_many_files(disc, picture, tmp_path):
+    big = tmp_path / "big"
+    big.mkdir()
+    (big / "x.bin").write_bytes(bytes(40_000_000))
+    with pytest.raises(SystemExit, match="files need"):
+        main(["plan", "--disc", disc, "--picture", picture, "--files", str(big), "--place", "outer",
+              "--r-max", "27", "-o", str(tmp_path / "x.iso")])
+
+
+def test_rings_biggest_outermost(disc, picture, tmp_path, capsys):
+    """One extent per file, physically smallest to biggest, listing order untouched, even radial gaps."""
+    src = tmp_path / "songs"
+    src.mkdir()
+    sizes = {"1 big.mp3": 300_000, "2 small.mp3": 40_000, "3 mid.mp3": 150_000, "4 tiny.mp3": 10_000}
+    for name, n in sizes.items():
+        (src / name).write_bytes(os.urandom(n))
+    out = str(tmp_path / "r.iso")
+    main(["make", "--disc", disc, "--picture", picture, "--files", str(src), "--place", "rings",
+          "--r-max", "30", "-o", out])
+    assert "4 rings from" in capsys.readouterr().out
+    spec = json.load(open(str(tmp_path / "r.image.json")))
+    entries = spec["files"]["entries"]
+    assert [os.path.basename(e["path"]) for e in entries] == sorted(sizes)  # listing order kept
+    assert all(e["extents"] == 1 for e in entries)
+    by_lba = sorted(entries, key=lambda e: e["lba"])
+    assert [e["bytes"] for e in by_lba] == sorted(sizes.values())  # biggest outermost
+    g = Profile.load(disc).geometry()
+    rings = [(g.end_radius(e["lba"]), g.end_radius(e["lba"] + -(-e["bytes"] // 2048))) for e in by_lba]
+    gaps = [b[0] - a[1] for a, b in zip(rings, rings[1:])]
+    assert max(gaps) - min(gaps) < 0.01 and min(gaps) > 0.5
+
+
+def test_rings_too_many_files(disc, picture, tmp_path):
+    big = tmp_path / "big"
+    big.mkdir()
+    (big / "x.bin").write_bytes(bytes(40_000_000))
+    with pytest.raises(SystemExit, match="as rings"):
+        main(["plan", "--disc", disc, "--picture", picture, "--files", str(big), "--place", "rings",
+              "--r-max", "27", "-o", str(tmp_path / "x.iso")])
 
 
 def test_make_picture_only_threshold(disc, picture, tmp_path):

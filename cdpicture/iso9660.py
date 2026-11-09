@@ -231,9 +231,11 @@ class FileSystem:
     With `allowed` (ascending LBAs free for data, e.g. from a picture/data mask) file data
     fills only those sectors, inner first, and `end_lba` is just past the last one used;
     the directories still sit contiguously from LBA 16 and end at `meta_end`.
+    With `by_size` the data goes in smallest file first (ties in listing order), so the biggest
+    files sit furthest out; the directory listing keeps its usual order.
     """
 
-    def __init__(self, src_dir: str, volume_id: str = "CDPICTURE", allowed=None):
+    def __init__(self, src_dir: str, volume_id: str = "CDPICTURE", allowed=None, by_size=False):
         if not volume_id or len(volume_id) > 16 or any(ch in JOLIET_BAD or ord(ch) > 0xFFFF for ch in volume_id):
             raise ValueError(f"volume label must be 1-16 characters, none of * / : ; ? \\ (Joliet): {volume_id!r}")
         if not os.path.isdir(src_dir):
@@ -256,6 +258,7 @@ class FileSystem:
             self.files += [c for c in d.children if not c.is_dir]
             stack += reversed([c for c in d.children if c.is_dir])
         self.allowed = None if allowed is None else np.asarray(allowed, np.int64)
+        self.by_size = by_size
         self.pt_bytes = len(_path_table(dirs, False, "<"))
         self.jpt_bytes = len(_path_table(dirs, True, "<"))
         pt, jpt = -(-self.pt_bytes // 2048), -(-self.jpt_bytes // 2048)
@@ -283,9 +286,10 @@ class FileSystem:
             raise ValueError("directory layout did not settle")
 
     def _place(self, start: int) -> None:
+        order = sorted(self.files, key=lambda f: f.size) if self.by_size else self.files
         if self.allowed is None:
             lba = start
-            for f in self.files:
+            for f in order:
                 f.lba = lba if f.size else 0
                 f.extents = [(f.lba, f.size)]
                 lba += -(-f.size // 2048)
@@ -297,7 +301,7 @@ class FileSystem:
             raise ValueError(f"files need {need} sectors ({need * 2048 / 1e6:.1f} MB), the data area has "
                              f"{len(pool)} ({len(pool) * 2048 / 1e6:.1f} MB)")
         i = 0
-        for f in self.files:
+        for f in order:
             k = -(-f.size // 2048)
             run = pool[i:i + k]
             i += k

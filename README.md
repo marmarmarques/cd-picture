@@ -113,25 +113,19 @@ python -m cdpicture grid --disc disc.json --along-track-frames 0 -o iso/grid.iso
 ```
 
 **Draw your picture on the template.** `cd-mask/` has a template that lines up with
-`--picture` at the default `--diameter-mm 116`: 3200 x 3200 px over 116 mm (27.6 px/mm). It shows the disc
-from the data side, which is how the picture will look on the disc.
+`--picture` at the default `--diameter-mm 116`: 3200 x 3200 px over 116 mm (27.6 px/mm), white = drawable, black = not. Use it as a selection or a layer mask.
 
-- `cd-mask-overlay.png`: put it as the top layer in your editor. The ring you can draw in is clear, the
-  area outside it is tinted red, the hole and the area past the edge are black, and blue lines mark the edges. Hide it before you export.
-- `cd-mask.png`: white = drawable, black = not. Use it as a selection or a layer mask.
+Export a square PNG at the same size. Anything outside the ring isn't burned.
+The picture is turned to perceptual lightness (CIE L*) and stretched to full contrast, transparent parts count as light.
 
-Export a square PNG at the same size, without the overlay. Anything outside the ring isn't burned.
-Colour is fine: the picture is turned to perceptual lightness (CIE L*) and stretched to full contrast,
-and transparent parts count as light.
-The ring is 25.6–56 mm, which fits the default `--r-max 56` and a track that starts around 25.3 mm. If your
-disc or `--r-max` is different, change `R_IN` / `R_OUT` at the top of the script and run it again:
+There are two files: `cd-mask.png` (the mask) and `cd-mask-overlay.png` (a guide layer: clear ring, red
+outside it, blue edges). The ring is 25.6-56 mm, which fits the default `--r-max 56` and a track that starts
+around 25.3 mm. If your disc or `--r-max` is different, make a template for it. `--name` adds a suffix, so
+the default files stay as they are:
 
 ```bash
-python cd-mask/make_mask.py
+python cd-mask/make_mask.py --name mydisc --r-in 25.3 --r-out 56
 ```
-
-With `--place center` the files take up the inner part of the ring, so the picture only starts outside
-them. `plan` shows where.
 
 **Make a picture disc**, optionally with files:
 
@@ -139,13 +133,15 @@ them. `plan` shows where.
 python -m cdpicture make --disc disc.json --picture pic.png --files filedir -o iso/disc.iso
 ```
 
-`--place` decides where the files go:
-
 | `--place` | Files go | Picture |
 |---|---|---|
 | `auto` (default) | hidden inside the picture | re-toned so the files don't show. Contrast is lowered only if the files need the room (below) |
 | `center` | files are packed in the inner section | image starts just outside the files |
+| `outer` | files are packed in a ring at the outer edge (the computer's file list stays at the centre, a few sectors) | image ends just inside the files. Suits a picture whose subject is in the middle |
+| `rings` | each file in one piece, which on the spiral is a thin ring; the rings are spread with equal gaps from the middle out, smallest file innermost and biggest outermost (the file list on the disc keeps its usual order) | unchanged between the rings. One piece per file suits players that choke on split files |
 | `mask.png` | where the PNG is white | unchanged, so the files show as grey there |
+
+Of the methods above, `center`, `outer`, and `rings` keep the files contiguous, which is definitely a must if you wanna use the CD on any player, such as a car radio.
 
 **More data means less contrast.** With `auto`, the contrast is lowered until the files fit, this makes the image grayer overall. To choose it yourself, use `--contrast 70`.
 
@@ -190,7 +186,7 @@ Edit `disc.json` by hand to change a profile setting, or run `profile` again.
 | `contrast N %` | `auto`: how much contrast the picture keeps. `(lowered so the files fit)` means the files took some; below 50 % it warns that the picture will look faint. |
 | `files hidden in the picture: N % of sectors, M % of what it could hide` | `auto`: M under 100 % means the data is spread thinner than it could be, which hides a slightly wrong `--data-tone` better. It doesn't change the look. |
 | `room for files: ... MB at 100 %, ...` | `plan`: how much fits at a few contrasts, to pick `--contrast` or check what `auto` will do. |
-| `This picture can hide up to N MB` | The files don't fit. Use fewer files, a lower `--contrast` (or `auto`), or `center`. |
+| `This picture can hide up to N MB` | The files don't fit. Use fewer files, a lower `--contrast` (or `auto`), `center`, `outer` or `rings`. |
 | `N files, X MB in K pieces` | Files are split around the picture. Thousands of pieces is fine. |
 | `.preview.png`, `.layout.png`, `.sheet.png` | Look before burning. `layout` shows files in yellow; `sheet` simulates the burned disc. |
 
@@ -203,6 +199,33 @@ Burn the `.iso` as a disc image at a low speed (8x). A GH70N reset its connectio
 
 The wrong mode turns the picture into noise. The Windows burner also needs some spare room to
 close the disc: on a 359,847-sector disc it took a 359,600-sector image but refused one of 359,800.
+
+## Audio CDs (experimental, not burned yet)
+
+`audio` makes a playable audio CD (BIN + CUE) whose music draws the picture. Every 16-bit
+sample is moved to the nearest value whose **low byte** is a dark-burning or light-burning
+byte (by its EFM transition count, like 0D and AA); the high bytes stay the music's. Audio has
+no scrambler or sector header, so the same CIRC mapping applies with every byte usable.
+
+```bash
+python -m cdpicture audio --disc disc.json --picture pic.png --tracks album/ --level medium -o iso/album.bin
+```
+
+| `--level` | Picture contrast vs a data disc | Added noise |
+|---|---|---|
+| `mild` | ~27 % | ~−75 dBFS, steps up to 22 LSB; below the hearing threshold even in silence |
+| `medium` (default) | ~35–39 % | ~−61 dBFS, steps up to 110 LSB |
+| `extreme` | ~53 % | ~−57 dBFS, steps up to 110 LSB; can be heard in quiet passages |
+
+**Write offset (must).** Burners shift audio by a drive-specific number of samples. One CIRC frame holds 6 samples, so any shift that isn't a multiple of 6 smears the picture into faint ghosts- Measure it once per burner:
+rip a burned audio image with EAC (read offset set, whole disc to one WAV) and compare:
+
+```bash
+python -m cdpicture audio-offset --bin iso/album.bin --rip "album.wav"
+```
+
+then build with `--write-offset N`. Without a ripper, burn `audio-grid --offset-sweep --loud`:
+6 rings assume offsets N..N+5 and only the right one shows a sharp grid (`--loud` plays as a loud buzz).
 
 ## Tests
 

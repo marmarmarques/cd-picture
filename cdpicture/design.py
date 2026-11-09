@@ -123,3 +123,8 @@ def clear_inside(design: np.ndarray, r_mm: float) -> None:
     """Set everything within r_mm of the centre to background, in place."""
     box, inside = _inner(r_mm)
     design[box, box][inside] = 0
+
+
+def clear_outside(design: np.ndarray, r_mm: float) -> None:
+    """Set everything at r_mm or further from the centre to background, in place."""
+    design[~in_circle(r_mm)] = 0

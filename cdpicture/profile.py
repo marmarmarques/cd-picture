@@ -14,17 +14,15 @@ import numpy as np
 
 from . import ecma130 as E
 from .textures import texture_bytes
-from .track import Geometry, correction_from
+from .track import Geometry, correction_from, load_fit
 
 KIND = "cdpicture-disc"
 
 
 def build(geo_path: str, correction_path: str | None = None, along_track_frames: float = 0.0,
-          cd_sector: str = "mode1", dark: str = "0D", light: str = "AA", data_tone: float = 0.5) -> dict:
-    with open(geo_path, encoding="utf-8") as f:
-        fit = json.load(f)["fit"]
-    if fit.get("media") != "cd":
-        raise ValueError("need a CD geometry fit (media=cd); DVD fits must not be reused")
+          cd_sector: str = "mode1", dark: str = "0D", light: str = "AA", data_tone: float = 0.5,
+          allow_stopped: bool = False) -> dict:
+    fit = load_fit(geo_path, allow_stopped)
     corr = None
     if correction_path:
         with open(correction_path, encoding="utf-8") as f:
